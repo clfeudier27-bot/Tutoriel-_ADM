@@ -29,9 +29,9 @@ sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
 
 ```{r}
 plotQualityProfile(fnFs[1:2])
+plotQualityProfile(fnRs[1:2])
 ```
-> plotQualityProfile(fnFs[1:2])
-> plotQualityProfile(fnRs[1:2])
+
 
 
 
