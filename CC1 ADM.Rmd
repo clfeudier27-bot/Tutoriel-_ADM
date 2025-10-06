@@ -1,0 +1,119 @@
+---
+title: "CC1 ADM"
+author: "Chloé Eudier"
+date: "2025-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Changement de la direction pour aller dans le dossier dézippé avec les données dedans
+path<-"~/Tutoriel-_ADM/MiSeq_SOP"
+list.files(path)
+```
+
+```{r}
+# Activation du package dada2 via la commande library pour utiliser les commandes nécessaires à l'analyse de données de séquençage
+library(dada2)
+packageVersion("dada2")
+```
+
+```{r}
+# Indication du format sous lequel les fichiers fastq sont nommés et associer R1 à Forward et R2 à Reverse
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE))
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+```
+
+```{r}
+# Création du graphique permettant l'observation de la qualité de chaque séquence
+plotQualityProfile(fnFs[1:2])
+plotQualityProfile(fnRs[1:2])
+```
+
+```{r}
+# On associe le bon nom à chaque fichier fastq qui va être filtré (format fastq.gz)
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+```
+
+```{r}
+# On filtre les données en jouant sur différents paramètres de sorte à obtenir un meilleur score de qualité de séquence
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(240,160),
+              maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+              compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+head(out)
+```
+
+```{r}
+# Estimation du nombre d'erreurs de séquençage estimées dans les échantillons
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+```
+
+```{r}
+# Visualisation des erreurs estimées (pour chaque transition de base possible)
+plotErrors(errF, nominalQ=TRUE)
+```
+
+```{r}
+# Détection des inférences dans les échantillons
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+dadaFs[[1]]
+```
+
+```{r}
+# On merge R1 et R2 pour obtenir la séquence en entier 
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+head(mergers[[1]])
+```
+
+```{r}
+# Construction d'une table d'ASV pour observer l'abondance des séquences dans les échantillons
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+table(nchar(getSequences(seqtab)))
+```
+
+```{r}
+# Suppression des ASV chimériques (morceaux de séquences appartenant à 2 parents différents)
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+```{r}
+# Observation du nombre de lectures qui sont sorties après chaque étape pour voir si on a gardé un maximum de lectures présentent au départ
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+```{r}
+# Assigniation de taxonomie pour chaque séquences afin d'obtenir des informations sur les différents rangs (Domaine jusqu'à l'espèce si c'est possible)
+taxa <- assignTaxonomy(seqtab.nochim,"~/Tutoriel-_ADM/silva_nr99_v138.2_toSpecies_trainset.fa.gz", multithread=TRUE)
+```
+
+```{r}
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+```{r}
+# Comparasion des ASV inferées pour determiner la composition de la communauté bactérienne
+unqs.mock <- seqtab.nochim["Mock",]
+unqs.mock <- sort(unqs.mock[unqs.mock>0], decreasing=TRUE) # Drop ASVs absent in the Mock
+cat("DADA2 inferred", length(unqs.mock), "sample sequences present in the Mock community.\n")
+mock.ref <- getSequences(file.path(path, "HMP_MOCK.v35.fasta"))
+match.ref <- sum(sapply(names(unqs.mock), function(x) any(grepl(x, mock.ref))))
+cat("Of those,", sum(match.ref), "were exact matches to the expected reference sequences.\n")
+```
